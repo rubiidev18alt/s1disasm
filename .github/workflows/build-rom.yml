@@ -2,7 +2,7 @@ name: Build Sega Genesis ROM
 
 on:
   push:
-    branches: [AS, movement-hack-features]
+    branches: [AS, fix-build-workflow]
   pull_request:
     branches: [AS]
   workflow_dispatch:
@@ -19,22 +19,29 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y lua5.4
+          lua5.4 -v
+
+      - name: Prepare generated asset folders
+        run: |
+          mkdir -p sound/dac/pcm/generated
+          mkdir -p sound/dac/dpcm/generated
 
       - name: Apply movement hack patches
         run: python3 tools/apply_movement_mods.py
 
       - name: Make bundled tools executable
         run: |
-          find build_tools -type f -name 'asl' -exec chmod +x {} +
-          find build_tools -type f -name 'p2bin' -exec chmod +x {} +
-          find build_tools -type f -name 'convsym' -exec chmod +x {} +
-          find build_tools -type f -name 'fixheader' -exec chmod +x {} +
+          chmod +x build_tools/Linux-x86_64/asl
+          chmod +x build_tools/Linux-x86_64/p2bin
+          find build_tools -type f \( -name 'asl' -o -name 'p2bin' -o -name 'convsym' -o -name 'fixheader' \) -exec chmod +x {} +
 
       - name: Build ROM
         run: lua5.4 build.lua
 
       - name: Verify ROM was produced
-        run: test -s s1built.bin
+        run: |
+          test -s s1built.bin
+          ls -lh s1built.bin
 
       - name: Upload ROM artifact
         uses: actions/upload-artifact@v4

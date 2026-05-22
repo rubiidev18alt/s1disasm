@@ -1,10 +1,4 @@
 #!/usr/bin/env python3
-"""Apply Rubii movement-hack edits to the Sonic 1 disassembly.
-
-This patcher is intentionally source-only. It does not download or include ROMs,
-external sprites, or external sounds. It reuses the repo's existing Sonic object
-code, animations, and sound IDs.
-"""
 from __future__ import annotations
 
 from pathlib import Path
@@ -14,10 +8,9 @@ import sys
 ROOT = Path(__file__).resolve().parents[1]
 SONIC_OBJ = ROOT / "_incObj" / "01 Sonic.asm"
 SONIC_MAIN = ROOT / "sonic.asm"
-
+NO_CAP_SPEED = "$3FFF"
 MARKER_OBJ = "; Rubii movement hack additions"
 MARKER_MAIN = "; Rubii extended camera routine"
-NO_CAP_SPEED = "$3FFF"
 
 
 def read(path: Path) -> str:
@@ -48,39 +41,33 @@ def replace_in_block(text: str, start: str, end: str, replacements: dict[str, st
 
 
 def remove_speed_caps(text: str) -> str:
-    # Raise the configurable ground/air top speed variable everywhere Sonic sets it.
-    # $3FFF is effectively uncapped for normal gameplay but avoids 16-bit overflow in
-    # routines that double the value while rolling.
     text = re.sub(
         r"move\.w\t#\$(?:300|600|C00),\(v_sonspeedmax\)\.w",
         f"move.w\t#{NO_CAP_SPEED},(v_sonspeedmax).w",
         text,
     )
-
-    # Raise the direct rolling X/Y clamps without touching unrelated $1000 constants.
-    text = replace_in_block(
+    return replace_in_block(
         text,
         "Sonic_AngledRollSpeed:",
         "; End of function Sonic_RollSpeed",
         {
-            "cmpi.w\t#$1000,d1": "cmpi.w\t#$3FFF,d1",
-            "move.w\t#$1000,d1": "move.w\t#$3FFF,d1",
-            "cmpi.w\t#-$1000,d1": "cmpi.w\t#-$3FFF,d1",
-            "move.w\t#-$1000,d1": "move.w\t#-$3FFF,d1",
             "cmpi.w\t#$1000,d0": "cmpi.w\t#$3FFF,d0",
             "move.w\t#$1000,d0": "move.w\t#$3FFF,d0",
             "cmpi.w\t#-$1000,d0": "cmpi.w\t#-$3FFF,d0",
             "move.w\t#-$1000,d0": "move.w\t#-$3FFF,d0",
+            "cmpi.w\t#$1000,d1": "cmpi.w\t#$3FFF,d1",
+            "move.w\t#$1000,d1": "move.w\t#$3FFF,d1",
+            "cmpi.w\t#-$1000,d1": "cmpi.w\t#-$3FFF,d1",
+            "move.w\t#-$1000,d1": "move.w\t#-$3FFF,d1",
         },
     )
-    return text
 
 
 def patch_sonic_modes(text: str) -> str:
     if "Sonic_CDAction" in text and "Sonic_HomingAttack" in text:
         return text
 
-    old = """Sonic_MdNormal:\t; While Sonic is on the ground and not rolling
+    text = must_replace(text, """Sonic_MdNormal:\t; While Sonic is on the ground and not rolling
 \t\tbsr.w\tSonic_Jump\t\t\t\t; check if we need to jump
 \t\tbsr.w\tSonic_SlopeResistWalk\t\t\t; handle resistance from running up slopes
 \t\tbsr.w\tSonic_Move\t\t\t\t; handle Sonic's left/right movement
@@ -90,10 +77,9 @@ def patch_sonic_modes(text: str) -> str:
 \t\tbsr.w\tSonic_AnglePos\t\t\t\t; update Sonic's current angle as he walks along the floor
 \t\tbsr.w\tSonic_SlopeRepel\t\t\t; handle Sonic detaching from walls if not fast enough
 \t\trts
-"""
-    new = """Sonic_MdNormal:\t; While Sonic is on the ground and not rolling
+""", """Sonic_MdNormal:\t; While Sonic is on the ground and not rolling
 \t\tclr.b\t(v_unused3).w\t\t\t\t; reset homing attack once Sonic is grounded
-\t\tbsr.w\tSonic_CDAction\t\t\t\t; handle spindash/peelout charge and release
+\t\tbsr.w\tSonic_CDAction\t\t\t\t; handle spin dash/peelout charge and release
 \t\tbcs.s\t.cdactiondone\t\t\t\t; if charging or launching, skip normal ground controls
 \t\tbsr.w\tSonic_Jump\t\t\t\t; check if we need to jump
 \t\tbsr.w\tSonic_SlopeResistWalk\t\t\t; handle resistance from running up slopes
@@ -105,90 +91,67 @@ def patch_sonic_modes(text: str) -> str:
 \t\tbsr.w\tSonic_SlopeRepel\t\t\t; handle Sonic detaching from walls if not fast enough
 .cdactiondone:
 \t\trts
-"""
-    text = must_replace(text, old, new, "Sonic_MdNormal")
+""", "Sonic_MdNormal")
 
-    text = must_replace(
-        text,
-        """Sonic_MdJump:\t; While Sonic is in the air but not rolling
+    text = must_replace(text, """Sonic_MdJump:\t; While Sonic is in the air but not rolling
 \t\tbsr.w\tSonic_JumpHeight\t\t\t; handle Sonic's jump height based on whether the jump button is still held
-""",
-        """Sonic_MdJump:\t; While Sonic is in the air but not rolling
+""", """Sonic_MdJump:\t; While Sonic is in the air but not rolling
 \t\tbsr.w\tSonic_HomingAttack\t\t\t; homing attack/air dash on jump button press
 \t\tbsr.w\tSonic_JumpHeight\t\t\t; handle Sonic's jump height based on whether the jump button is still held
-""",
-        "Sonic_MdJump",
-    )
+""", "Sonic_MdJump")
 
-    text = must_replace(
-        text,
-        """Sonic_MdRoll:\t; While Sonic is on the ground and rolling
+    text = must_replace(text, """Sonic_MdRoll:\t; While Sonic is on the ground and rolling
 \t\tbsr.w\tSonic_Jump\t\t\t\t; check if we need to jump
-""",
-        """Sonic_MdRoll:\t; While Sonic is on the ground and rolling
+""", """Sonic_MdRoll:\t; While Sonic is on the ground and rolling
 \t\tclr.b\t(v_unused3).w\t\t\t\t; reset homing attack once Sonic is grounded
 \t\tbsr.w\tSonic_Jump\t\t\t\t; check if we need to jump
-""",
-        "Sonic_MdRoll",
-    )
+""", "Sonic_MdRoll")
 
-    text = must_replace(
-        text,
-        """Sonic_MdJump2:\t; While Sonic is in the air and rolling (usually, but not limited to, jumping)
+    return must_replace(text, """Sonic_MdJump2:\t; While Sonic is in the air and rolling (usually, but not limited to, jumping)
 \t\tbsr.w\tSonic_JumpHeight\t\t\t; handle Sonic's jump height based on whether the jump button is still held
-""",
-        """Sonic_MdJump2:\t; While Sonic is in the air and rolling (usually, but not limited to, jumping)
+""", """Sonic_MdJump2:\t; While Sonic is in the air and rolling (usually, but not limited to, jumping)
 \t\tbsr.w\tSonic_HomingAttack\t\t\t; homing attack/air dash on jump button press
 \t\tbsr.w\tSonic_JumpHeight\t\t\t; handle Sonic's jump height based on whether the jump button is still held
-""",
-        "Sonic_MdJump2",
-    )
-    return text
+""", "Sonic_MdJump2")
 
 
 MOVEMENT_ROUTINES = r'''
 
 ; ===========================================================================
 ; Rubii movement hack additions
-; ---------------------------------------------------------------------------
-; v_unused2.w = spin dash / peelout charge
-;   0       = not charging
-;   positive = spin dash charge
-;   negative = peelout charge
-; v_unused3.b = homing attack used flag, reset when Sonic touches ground
-; ---------------------------------------------------------------------------
+; v_unused2.w = spin dash / peelout charge, v_unused3.b = homing used flag
 
 Sonic_CDAction:
-		move.w	(v_unused2).w,d0			; is a spin dash/peelout being charged?
-		beq.s	.checknew				; if not, check for a new charge
-		bmi.w	.peelcharge				; negative charge means peelout
+		move.w	(v_unused2).w,d0
+		beq.w	.checknew
+		bmi.w	.peelcharge
 
 .spindashcharge:
-		btst	#bitDn,(v_jpadhold2).w			; keep charging while Down is held
-		beq.s	.release_spindash			; release when Down is let go
-		move.b	#id_Roll,obAnim(a0)			; reuse Sonic 1 rolling sprites for the charge pose
-		move.b	(v_jpadpress2).w,d1			; rev only on a fresh A/B/C press
+		btst	#bitDn,(v_jpadhold2).w
+		beq.w	.release_spindash
+		move.b	#id_Roll,obAnim(a0)
+		move.b	(v_jpadpress2).w,d1
 		andi.b	#btnABC,d1
-		beq.s	.actiondone
-		addi.w	#$180,(v_unused2).w			; add charge
-		cmpi.w	#$A00,(v_unused2).w			; clamp to a sane launch speed
-		bls.s	.spinsound
+		beq.w	.actiondone
+		addi.w	#$180,(v_unused2).w
+		cmpi.w	#$A00,(v_unused2).w
+		bls.w	.spinsound
 		move.w	#$A00,(v_unused2).w
 .spinsound:
-		move.w	#sfx_Roll,d0				; in-game roll sound as charge/release sound
+		move.w	#sfx_Roll,d0
 		jsr	(QueueSound2).l
-		bra.s	.actiondone
+		bra.w	.actiondone
 
 .release_spindash:
-		move.w	(v_unused2).w,d1			; use charge as launch speed
+		move.w	(v_unused2).w,d1
 		clr.w	(v_unused2).w
-		bset	#2,obStatus(a0)				; enter rolling state
+		bset	#2,obStatus(a0)
 		move.b	#sonic_roll_height,obHeight(a0)
 		move.b	#sonic_roll_width,obWidth(a0)
-		addq.w	#5,obY(a0)				; match vanilla roll hitbox adjustment
+		addq.w	#5,obY(a0)
 		move.b	#id_Roll,obAnim(a0)
-		btst	#0,obStatus(a0)				; facing left?
-		beq.s	.spindashright
+		btst	#0,obStatus(a0)
+		beq.w	.spindashright
 		neg.w	d1
 .spindashright:
 		move.w	d1,obInertia(a0)
@@ -196,28 +159,28 @@ Sonic_CDAction:
 		move.w	#0,obVelY(a0)
 		move.w	#sfx_Roll,d0
 		jsr	(QueueSound2).l
-		bra.s	.actiondone
+		bra.w	.actiondone
 
 .peelcharge:
-		btst	#bitUp,(v_jpadhold2).w			; hold Up...
-		beq.s	.release_peelout
-		move.b	(v_jpadhold2).w,d1			; ...and A/B/C to keep charging
+		btst	#bitUp,(v_jpadhold2).w
+		beq.w	.release_peelout
+		move.b	(v_jpadhold2).w,d1
 		andi.b	#btnABC,d1
-		beq.s	.release_peelout
-		move.b	#id_Run,obAnim(a0)			; reuse in-game run sprites for peelout
-		subi.w	#$80,(v_unused2).w			; charge more negative
+		beq.w	.release_peelout
+		move.b	#id_Run,obAnim(a0)
+		subi.w	#$80,(v_unused2).w
 		cmpi.w	#-$C00,(v_unused2).w
-		bge.s	.actiondone
+		bge.w	.actiondone
 		move.w	#-$C00,(v_unused2).w
-		bra.s	.actiondone
+		bra.w	.actiondone
 
 .release_peelout:
 		move.w	(v_unused2).w,d1
-		neg.w	d1					; make charge positive
+		neg.w	d1
 		clr.w	(v_unused2).w
 		move.b	#id_Run,obAnim(a0)
 		btst	#0,obStatus(a0)
-		beq.s	.peelright
+		beq.w	.peelright
 		neg.w	d1
 .peelright:
 		move.w	d1,obInertia(a0)
@@ -225,68 +188,65 @@ Sonic_CDAction:
 		move.w	#0,obVelY(a0)
 		move.w	#sfx_Roll,d0
 		jsr	(QueueSound2).l
-		bra.s	.actiondone
+		bra.w	.actiondone
 
 .checknew:
-		tst.w	obInertia(a0)				; only start charging from a standstill
-		bne.s	.noaction
-		btst	#bitDn,(v_jpadhold2).w			; Down + fresh A/B/C starts spin dash
-		beq.s	.checkpeelout
+		tst.w	obInertia(a0)
+		bne.w	.noaction
+		btst	#bitDn,(v_jpadhold2).w
+		beq.w	.checkpeelout
 		move.b	(v_jpadpress2).w,d1
 		andi.b	#btnABC,d1
-		beq.s	.noaction
+		beq.w	.noaction
 		move.w	#$300,(v_unused2).w
 		move.b	#id_Roll,obAnim(a0)
 		move.w	#sfx_Roll,d0
 		jsr	(QueueSound2).l
-		bra.s	.actiondone
+		bra.w	.actiondone
 
 .checkpeelout:
-		btst	#bitUp,(v_jpadhold2).w			; Up + held A/B/C starts peelout
-		beq.s	.noaction
+		btst	#bitUp,(v_jpadhold2).w
+		beq.w	.noaction
 		move.b	(v_jpadhold2).w,d1
 		andi.b	#btnABC,d1
-		beq.s	.noaction
+		beq.w	.noaction
 		move.w	#-$300,(v_unused2).w
 		move.b	#id_Run,obAnim(a0)
-		bra.s	.actiondone
-
+		bra.w	.actiondone
 .noaction:
-		moveq	#0,d0					; clear carry for the caller
+		moveq	#0,d0
 		rts
 .actiondone:
-		ori	#1,ccr					; set carry for the caller
+		ori.b	#1,ccr
 		rts
 ; End of function Sonic_CDAction
 
-
 Sonic_HomingAttack:
-		tst.b	(v_unused3).w				; once per jump/airborne state
-		bne.s	.return
-		move.b	(v_jpadpress2).w,d0			; fresh A/B/C press triggers it
+		tst.b	(v_unused3).w
+		bne.w	.return
+		move.b	(v_jpadpress2).w,d0
 		andi.b	#btnABC,d0
-		beq.s	.return
+		beq.w	.return
 		move.b	#1,(v_unused3).w
-		bset	#2,obStatus(a0)				; use ball collision so normal enemy/monitor collision destroys targets
+		bset	#2,obStatus(a0)
 		move.b	#sonic_roll_height,obHeight(a0)
 		move.b	#sonic_roll_width,obWidth(a0)
 		move.b	#id_Roll,obAnim(a0)
 		bsr.w	Sonic_FindHomingTarget
-		bne.s	.airdash				; no badnik/monitor nearby, do a fast air dash
-
-		move.w	obX(a1),d0				; target found: home toward it
+		bne.w	.airdash
+		move.w	obX(a1),d0
 		sub.w	obX(a0),d0
-		bpl.s	.targetright
+		bpl.w	.targetright
 		move.w	#-$A00,obVelX(a0)
-		bra.s	.targety
+		bra.w	.targety
 .targetright:
 		move.w	#$A00,obVelX(a0)
 .targety:
 		move.w	obY(a1),d0
 		sub.w	obY(a0),d0
-		bpl.s	.targetdown
+		bpl.w	.targetdown
 		move.w	#-$800,obVelY(a0)
-		bra.s	.sound
+		bra.w	.sound
 .targetdown:
 		move.w	#$800,obVelY(a0)
 .sound:
@@ -294,12 +254,11 @@ Sonic_HomingAttack:
 		jsr	(QueueSound2).l
 .return:
 		rts
-
 .airdash:
-		btst	#0,obStatus(a0)				; use facing direction when no lock-on target exists
-		bne.s	.dashleft
+		btst	#0,obStatus(a0)
+		bne.w	.dashleft
 		move.w	#$C00,obVelX(a0)
-		bra.s	.dashup
+		bra.w	.dashup
 .dashleft:
 		move.w	#-$C00,obVelX(a0)
 .dashup:
@@ -309,41 +268,39 @@ Sonic_HomingAttack:
 		rts
 ; End of function Sonic_HomingAttack
 
-
 Sonic_FindHomingTarget:
-		lea	(v_lvlobjspace).w,a1			; first non-player level object slot
-		lea	(v_lvlobjend).w,a2			; end of object RAM
+		lea	(v_lvlobjspace).w,a1
+		lea	(v_lvlobjend).w,a2
 .loop:
 		cmpa.l	a2,a1
-		bhs.s	.notfound
+		bhs.w	.notfound
 		tst.b	obID(a1)
-		beq.s	.next
+		beq.w	.next
 		bsr.w	Sonic_IsHomingTarget
-		bne.s	.next
-		move.w	obX(a1),d0				; horizontal range check
+		bne.w	.next
+		move.w	obX(a1),d0
 		sub.w	obX(a0),d0
-		bpl.s	.xpositive
+		bpl.w	.xpositive
 		neg.w	d0
 .xpositive:
 		cmpi.w	#$C0,d0
-		bhi.s	.next
-		move.w	obY(a1),d1				; vertical range check
+		bhi.w	.next
+		move.w	obY(a1),d1
 		sub.w	obY(a0),d1
-		bpl.s	.ypositive
+		bpl.w	.ypositive
 		neg.w	d1
 .ypositive:
 		cmpi.w	#$A0,d1
-		bhi.s	.next
-		moveq	#0,d0					; found: d0=0 and a1 points at target
+		bhi.w	.next
+		moveq	#0,d0
 		rts
 .next:
 		adda.w	#object_size,a1
-		bra.s	.loop
+		bra.w	.loop
 .notfound:
 		moveq	#1,d0
 		rts
 ; End of function Sonic_FindHomingTarget
-
 
 Sonic_IsHomingTarget:
 		move.b	obID(a1),d0
@@ -394,42 +351,26 @@ def append_movement_routines(text: str) -> str:
 
 def patch_main(text: str) -> str:
     if "Sonic_ExtendedCamera" not in text:
-        text = must_replace(
-            text,
-            """Level_DoScroll:
+        text = must_replace(text, """Level_DoScroll:
 \t\tbsr.w\tDeformLayers\t\t\t; scroll planes and do background deformation
-""",
-            """Level_DoScroll:
+""", """Level_DoScroll:
 \t\tbsr.w\tSonic_ExtendedCamera\t\t\t; camera lead at high speed
 \t\tbsr.w\tDeformLayers\t\t\t; scroll planes and do background deformation
-""",
-            "Level_DoScroll",
-        )
-        text = must_replace(
-            text,
-            """\t\tmove.w\t#0,(v_jpadhold2).w\t\t; clear button input states for Sonic player object
+""", "Level_DoScroll")
+        text = must_replace(text, """\t\tmove.w\t#0,(v_jpadhold2).w\t\t; clear button input states for Sonic player object
 \t\tmove.w\t#0,(v_jpadhold1).w\t\t; clear actual button input states for controller 1
-""",
-            """\t\tmove.w\t#0,(v_jpadhold2).w\t\t; clear button input states for Sonic player object
+""", """\t\tmove.w\t#0,(v_jpadhold2).w\t\t; clear button input states for Sonic player object
 \t\tmove.w\t#0,(v_jpadhold1).w\t\t; clear actual button input states for controller 1
 \t\tclr.w\t(v_unused2).w\t\t\t; clear movement hack charge state
 \t\tclr.b\t(v_unused3).w\t\t\t; clear movement hack homing state
-""",
-            "movement state clear",
-        )
+""", "movement state clear")
     if MARKER_MAIN not in text:
         routine = r'''
 ; ===========================================================================
 ; Rubii extended camera routine
-; ---------------------------------------------------------------------------
-; Small look-ahead effect: at high horizontal speed, bias the foreground camera
-; two pixels per frame in Sonic's travel direction while respecting boundaries.
-; ---------------------------------------------------------------------------
 
 Sonic_ExtendedCamera:
-		tst.w	(v_debuguse).w			; do not fight debug camera
-		bne.s	.return
-		tst.b	(f_lockscreen).w			; do not push during locked boss screens
+		tst.w	(v_debuguse).w
 		bne.s	.return
 		move.w	(v_player+obVelX).w,d0
 		bpl.s	.rightcheck
@@ -445,7 +386,7 @@ Sonic_ExtendedCamera:
 		cmpi.w	#$900,d0
 		blt.s	.return
 		move.w	(v_limitright2).w,d1
-		subi.w	#$140,d1				; right boundary minus 320px screen width
+		subi.w	#$140,d1
 		cmp.w	(v_screenposx).w,d1
 		bls.s	.return
 		addq.w	#2,(v_screenposx).w
@@ -454,26 +395,14 @@ Sonic_ExtendedCamera:
 ; End of function Sonic_ExtendedCamera
 
 '''
-        text = must_replace(
-            text,
-            "; ===========================================================================\n; >>> Misc level logic for specific circumstances\n",
-            routine + "; ===========================================================================\n; >>> Misc level logic for specific circumstances\n",
-            "extended camera routine insertion",
-        )
+        text = must_replace(text, "; ===========================================================================\n; >>> Misc level logic for specific circumstances\n", routine + "; ===========================================================================\n; >>> Misc level logic for specific circumstances\n", "extended camera routine insertion")
     return text
 
 
 def main() -> int:
-    sonic_obj = read(SONIC_OBJ)
-    sonic_obj = remove_speed_caps(sonic_obj)
-    sonic_obj = patch_sonic_modes(sonic_obj)
-    sonic_obj = append_movement_routines(sonic_obj)
+    sonic_obj = append_movement_routines(patch_sonic_modes(remove_speed_caps(read(SONIC_OBJ))))
     write(SONIC_OBJ, sonic_obj)
-
-    sonic_main = read(SONIC_MAIN)
-    sonic_main = patch_main(sonic_main)
-    write(SONIC_MAIN, sonic_main)
-
+    write(SONIC_MAIN, patch_main(read(SONIC_MAIN)))
     print("Applied movement hack patches: no speed cap, CD spin dash, peelout, extended camera, homing attack.")
     return 0
 
@@ -481,6 +410,6 @@ def main() -> int:
 if __name__ == "__main__":
     try:
         raise SystemExit(main())
-    except Exception as exc:  # fail loudly in CI
+    except Exception as exc:
         print(f"movement patch failed: {exc}", file=sys.stderr)
         raise SystemExit(1)
