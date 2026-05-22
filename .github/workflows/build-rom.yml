@@ -1,0 +1,44 @@
+name: Build Sega Genesis ROM
+
+on:
+  push:
+    branches: [AS, movement-hack-features]
+  pull_request:
+    branches: [AS]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Install Lua
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y lua5.4
+
+      - name: Apply movement hack patches
+        run: python3 tools/apply_movement_mods.py
+
+      - name: Make bundled tools executable
+        run: |
+          find build_tools -type f -name 'asl' -exec chmod +x {} +
+          find build_tools -type f -name 'p2bin' -exec chmod +x {} +
+          find build_tools -type f -name 'convsym' -exec chmod +x {} +
+          find build_tools -type f -name 'fixheader' -exec chmod +x {} +
+
+      - name: Build ROM
+        run: lua5.4 build.lua
+
+      - name: Verify ROM was produced
+        run: test -s s1built.bin
+
+      - name: Upload ROM artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: s1built-genesis-rom
+          path: s1built.bin
+          if-no-files-found: error
